@@ -28,19 +28,37 @@ git clone <repository-url>
 cd resume-scoring-app
 ```
 
-### 2. Install Required Packages
+### 2. Set Up Virtual Environment
+
+It's recommended to use a virtual environment to avoid package conflicts.
+
+#### For Windows:
+```bash
+# Create a virtual environment
+python -m venv env
+
+# Activate the virtual environment
+env\Scripts\activate
+```
+
+#### For macOS/Linux:
+```bash
+# Create a virtual environment
+python3 -m venv env
+
+# Activate the virtual environment
+source env/bin/activate
+```
+
+### 3. Install Required Packages
+
+With the virtual environment activated, install the required packages:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-If no requirements.txt exists, install the following:
-
-```bash
-pip install python-dotenv PyPDF2 requests
-```
-
-### 3. Get an OpenRouter API Key
+### 4. Get an OpenRouter API Key
 
 1. Go to [OpenRouter.ai](https://openrouter.ai/)
 2. Sign up for a free account
@@ -53,7 +71,7 @@ pip install python-dotenv PyPDF2 requests
 - **Paid Options**: For better accuracy, you can add credit to your account ($5 minimum) for access to more advanced models
 - **Recommended Model**: `openai/gpt-4o-mini` (default) offers a good balance of cost and performance
 
-### 4. Prepare Your Files
+### 5. Prepare Your Files
 
 1. Create the following folders if they don't exist:
    ```
@@ -66,7 +84,10 @@ pip install python-dotenv PyPDF2 requests
 3. Create a file named `job_description.md` in the `job_descriptions/` folder
 4. Write your job description in the Markdown file
 
-### 5. Run the Application
+### 6. Run the Application
+
+Make sure your virtual environment is activated, then run:
+
 
 ```bash
 python resume_scorer.py
@@ -79,6 +100,11 @@ The application will:
 4. Ask for any additional prioritization criteria
 5. Process the resumes in batches
 6. Save individual results and a final ranking
+
+To deactivate the virtual environment when you're done:
+```bash
+deactivate
+```
 
 ## How It Works
 
@@ -103,6 +129,10 @@ The application will:
 - **File Format Problems**: Make sure resumes are PDF files
 - **Job Description Missing**: Create a job_description.md file with detailed requirements
 - **Rate Limiting**: If processing many resumes, consider increasing the delay between batches
+- **Virtual Environment Issues**: 
+  - Make sure you activate the virtual environment before running the script
+  - If you see "command not found" on macOS/Linux for the activate script, try running `chmod +x env/bin/activate` first
+  - For Windows PowerShell users, you may need to run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` to allow script execution
 
 ## Advanced Usage
 
