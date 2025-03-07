@@ -18,7 +18,7 @@ if not os.path.exists('.env'):
             f.write("""RESUME_FOLDER=resumes
 JOB_DESC_FOLDER=job_descriptions
 RESULT_FOLDER=results
-BATCH_SIZE=5
+BATCH_SIZE=1
 OPENROUTER_API_KEY=
 OPENROUTER_MODEL=openai/gpt-4o-mini
 DEBUG=False
@@ -87,14 +87,6 @@ def update_env_file(key, value):
     with open('.env', 'w') as f:
         f.writelines(env_lines)
 
-# Configuration (will be loaded or prompted for)
-RESUME_FOLDER = os.getenv('RESUME_FOLDER', 'resumes')
-JOB_DESC_FOLDER = os.getenv('JOB_DESC_FOLDER', 'job_descriptions')
-RESULT_FOLDER = os.getenv('RESULT_FOLDER', 'results')
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', '5'))
-MAX_RETRIES = 3  # Maximum number of retry attempts for API calls
-DEBUG = os.getenv('DEBUG', 'False').lower() in ['true', '1', 't', 'yes']
-
 # Get user additional prioritization criteria (if any)
 def get_additional_criteria():
     print("\nOptional: Enter additional prioritization criteria (e.g., 'Prioritize candidates from NUS and NTU')")
@@ -132,6 +124,14 @@ def get_additional_criteria():
     
     return additional_criteria
 
+# Configuration (will be loaded or prompted for)
+RESUME_FOLDER = os.getenv('RESUME_FOLDER', 'resumes')
+JOB_DESC_FOLDER = os.getenv('JOB_DESC_FOLDER', 'job_descriptions')
+RESULT_FOLDER = os.getenv('RESULT_FOLDER', 'results')
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', '1'))  # Default to 1 for more reliable processing
+MAX_RETRIES = 3  # Maximum number of retry attempts for API calls
+DEBUG = os.getenv('DEBUG', 'False').lower() in ['true', '1', 't', 'yes']
+
 # Ensure result folder exists
 os.makedirs(RESULT_FOLDER, exist_ok=True)
 
@@ -144,38 +144,68 @@ def extract_text_from_pdf(pdf_path):
             text += page.extract_text()
     return text
 
+# Function to extract probable name from filename
+def extract_name_from_filename(filename):
+    # Remove extension
+    base_name = os.path.splitext(filename)[0]
+    # Replace underscores and hyphens with spaces
+    cleaned_name = base_name.replace('_', ' ').replace('-', ' ')
+    # Remove common words like "resume", "cv", etc.
+    for term in ['resume', 'cv', 'curriculum vitae']:
+        cleaned_name = cleaned_name.lower().replace(term, '').strip()
+    return cleaned_name.strip()
+
 # Function to read job description from .md file
 def read_job_description(job_desc_path):
     with open(job_desc_path, 'r') as file:
         job_desc = file.read()
     return job_desc
 
-# Function to process a batch of resumes
-def process_batch(resume_texts, job_desc, additional_criteria=None):
+# Function to process a single resume
+def process_resume(filename, resume_text, job_desc, additional_criteria=None):
+    # Extract probable name from filename for verification
+    probable_name = extract_name_from_filename(filename)
+    
+    system_message = """You are a resume scorer. Score each resume based on the provided job description. The score is on the scale of 0-100. The score can be in decimal.
+
+IMPORTANT - Your response format must be EXACTLY:
+name,score,reason
+
+Where:
+- 'name' is ONLY the candidate's name with no other commentary
+- 'score' is just the numeric score (e.g., 87.5)
+- 'reason' is EXACTLY ONE SHORT SENTENCE explaining the key factor in your decision, without using any commas
+
+Example correct format: "John Smith,87.5,Strong technical skills that match the job requirements"
+Example incorrect format: "Good skills in database management John Smith,87.5,Strong skills. Also has experience with React."
+
+DO NOT add any commentary, explanations, or notes outside this strict format. Keep the reason brief and to the point."""
+
+    # If we have a probable name from the filename, include it for verification
+    user_content = f"""Job Description: {job_desc}
+
+Filename: {filename}
+Probable name from filename: {probable_name}
+
+Resume Text:
+{resume_text}"""
+
+    # Add additional criteria if provided
+    additional_content = ""
+    if additional_criteria and additional_criteria.strip():
+        additional_content = f"""
+Additional prioritization note: {additional_criteria}
+
+IMPORTANT: The above is ONLY for consideration in scoring. You must STILL follow the EXACT output format specified in the system instructions:
+"name,score,reason" with the name being exactly the candidate's name from the resume.
+"""
+    
+    user_content += additional_content
+    
     headers = {
         'Authorization': f'Bearer {os.environ.get("OPENROUTER_API_KEY")}',
         'Content-Type': 'application/json'
     }
-    
-    # Keep the system message absolutely intact - this defines the required output format
-    system_message = 'You are a resume scorer. Score each resume based on the provided job description. The score is on the scale of 0-100. The score can be in decimal. Format your answer as "name,score,reason" separated by semicolons. For example, "name1,87.5,The reason without comma.;name2,90, Another reason." Please ONLY answer STRICTLY in this format and DON\'T use ANY comma when giving the reason, because it will break the format.'
-    
-    # If additional criteria are provided, insert them safely within the user content
-    # but with explicit instructions to maintain the required output format
-    additional_content = ""
-    if additional_criteria and additional_criteria.strip():
-        additional_content = f'''
-Additional prioritization note: {additional_criteria}
-
-IMPORTANT: The above is ONLY for consideration in scoring. You must STILL follow the EXACT output format specified in the system instructions:
-"name,score,reason" separated by semicolons with NO commas in the reason section.
-'''
-    
-    user_content = f'''Job Description: {job_desc}
-
-Resumes:
-{resume_texts}
-{additional_content}'''
     
     data = {
         'model': os.environ.get('OPENROUTER_MODEL', 'openai/gpt-4o-mini'),
@@ -193,6 +223,7 @@ Resumes:
     
     for attempt in range(MAX_RETRIES):
         try:
+            if DEBUG: print(f"DEBUG: Sending resume {filename} to API (attempt {attempt + 1})")
             response = requests.post('https://openrouter.ai/api/v1/chat/completions', headers=headers, json=data)
             response.raise_for_status()
             return response.json()
@@ -206,48 +237,100 @@ Resumes:
                 print(f"ERROR: API call failed after {MAX_RETRIES} attempts. Stopping the program.")
                 raise
 
-# Function to save results
-def save_results(results, result_folder, original_filenames):
-    saved_files = []
-    for i, result in enumerate(results):
-        if i >= len(original_filenames):
-            if DEBUG: print(f"DEBUG: No filename available for result {i}, skipping")
-            continue
-            
-        original_filename = original_filenames[i]
-        candidate_name = result['name']
-        parts = result['response'].split(',')
-        if len(parts) < 2:
-            if DEBUG: print(f"DEBUG: Skipping candidate response for {candidate_name} due to invalid format: {result['response']}")
-            continue
+# Function to parse and validate a single result
+def parse_result(response_json, filename):
+    if not response_json.get('choices'):
+        if DEBUG: print(f"DEBUG: No choices in API response for {filename}")
+        return None
         
-        # Use the first element as name, second as score, rest as reason
-        score_str = parts[1].strip()
+    raw_response = response_json['choices'][0]['message']['content'].strip()
+    if DEBUG: print(f"DEBUG: Raw response for {filename}: {raw_response}")
+    
+    # Handle multi-line responses by joining them
+    raw_response = raw_response.replace('\n', ' ').strip()
+    
+    # Extract probable name from filename for verification
+    probable_name = extract_name_from_filename(filename)
+    
+    try:
+        # Split by the first two commas to get name, score, and reason
+        first_comma = raw_response.find(',')
+        if first_comma == -1:
+            if DEBUG: print(f"DEBUG: Invalid format (no commas) in: {raw_response}")
+            return None
+            
+        # Extract candidate name (everything before first comma)
+        candidate_name = raw_response[:first_comma].strip()
+        
+        # Look for the second comma after the first one
+        rest_of_string = raw_response[first_comma+1:]
+        second_comma_pos = rest_of_string.find(',')
+        
+        if second_comma_pos == -1:
+            if DEBUG: print(f"DEBUG: Invalid format (only one comma) in: {raw_response}")
+            return None
+            
+        # Extract score (between first and second comma)
+        score_str = rest_of_string[:second_comma_pos].strip()
+        
+        # Extract reason (everything after the second comma)
+        reason = rest_of_string[second_comma_pos+1:].strip()
+        
+        # Convert score to float
         try:
             score = float(score_str)
         except Exception as e:
-            if DEBUG: print(f"DEBUG: Error converting score for {candidate_name} with response: {result['response']}. Error: {e}")
-            continue
+            if DEBUG: print(f"DEBUG: Error converting score '{score_str}' to float: {e}")
+            return None
         
-        reason = ','.join(parts[2:]).strip() if len(parts) > 2 else ''
+        # Verify the name makes sense
+        if len(candidate_name.split()) > 5:
+            if DEBUG: print(f"DEBUG: Name too long, likely contains extra text: {candidate_name}")
+            # Try to clean it up
+            candidate_name = ' '.join(candidate_name.split()[-3:])  # Take last 3 words as name
+            if DEBUG: print(f"DEBUG: Shortened to: {candidate_name}")
+        
+        # Check if extracted name is significantly different from filename
+        probable_words = set(w.lower() for w in probable_name.split() if len(w) > 2)
+        candidate_words = set(w.lower() for w in candidate_name.split() if len(w) > 2)
+        
+        # If we have words to compare and there's minimal overlap
+        if probable_words and candidate_words and not probable_words.intersection(candidate_words):
+            print(f"WARNING: Extracted name '{candidate_name}' doesn't match filename '{filename}'")
+            print(f"Probable name from filename: {probable_name}")
+            use_filename = input(f"Use name from filename instead? (y/n): ").strip().lower()
+            if use_filename == 'y':
+                candidate_name = probable_name
+                if DEBUG: print(f"DEBUG: Using filename-based name: {candidate_name}")
+            
         result_data = {
             'id': str(uuid.uuid4()),
             'name': candidate_name,
             'score': score,
             'reason': reason,
-            'original_filename': original_filename
+            'original_filename': filename
         }
         
-        # Save with original filename (without extension)
-        base_filename = os.path.splitext(original_filename)[0]
-        result_file = os.path.join(result_folder, f'{base_filename}.json')
-        with open(result_file, 'w') as f:
-            json.dump(result_data, f, indent=4)
+        return result_data
         
-        saved_files.append(result_file)
-        if DEBUG: print(f"DEBUG: Saved candidate result for {candidate_name} in {result_file}")
+    except Exception as e:
+        if DEBUG: print(f"DEBUG: Error processing response for {filename}: {raw_response}. Error: {e}")
+        return None
+
+# Function to save a single result
+def save_result(result_data, result_folder):
+    if not result_data:
+        return None
+        
+    # Save with original filename (without extension)
+    base_filename = os.path.splitext(result_data['original_filename'])[0]
+    result_file = os.path.join(result_folder, f'{base_filename}.json')
     
-    return saved_files
+    with open(result_file, 'w') as f:
+        json.dump(result_data, f, indent=4)
+    
+    if DEBUG: print(f"DEBUG: Saved result for {result_data['name']} in {result_file}")
+    return result_file
 
 # Main function
 def main():
@@ -299,75 +382,48 @@ def main():
         aggregate_and_save_results(RESULT_FOLDER)
         return
 
-    # Process the remaining resumes
-    resume_texts = []
+    # Process each resume individually for maximum reliability
+    processed_count = 0
     for resume_file in resume_files:
+        print(f"Processing {resume_file} ({processed_count + 1}/{len(resume_files)})")
+        
         result_text_file = os.path.join(RESULT_FOLDER, f'{resume_file}.txt')
         if os.path.exists(result_text_file):
-            print(f'{resume_file} text already extracted. Loading from {result_text_file}')
+            print(f'Text already extracted. Loading from {result_text_file}')
             with open(result_text_file, 'r') as f:
                 resume_text = f.read()
-            if DEBUG: print(f"DEBUG: Loaded resume {resume_file} with length {len(resume_text)}")
-            resume_texts.append((resume_file, resume_text))
         else:
             resume_path = os.path.join(RESUME_FOLDER, resume_file)
             resume_text = extract_text_from_pdf(resume_path)
-            if DEBUG: print(f"DEBUG: Extracted resume {resume_file} with length {len(resume_text)}")
-            resume_texts.append((resume_file, resume_text))
             print(f'Extracted text from {resume_file}')
             with open(result_text_file, 'w') as f:
                 f.write(resume_text)
-    
-    if DEBUG: print(f"DEBUG: Total resumes to process: {len(resume_texts)}")
-
-    # Process resumes in batches
-    for i in range(0, len(resume_texts), BATCH_SIZE):
-        batch = resume_texts[i:i + BATCH_SIZE]
-        batch_texts = '\n'.join([f'{file};{text}' for file, text in batch])
-        batch_filenames = [file for file, _ in batch]
         
         try:
-            response = process_batch(batch_texts, job_desc, additional_criteria)
-            if DEBUG: print(f"DEBUG: API response for batch {i//BATCH_SIZE + 1}: {response}")
-            print(f'Processed batch {i//BATCH_SIZE + 1} of {(len(resume_texts) - 1)//BATCH_SIZE + 1}')
+            # Process single resume
+            response = process_resume(resume_file, resume_text, job_desc, additional_criteria)
             
-            results = []
-            if len(response.get('choices', [])) == len(batch):
-                for j, (file, _) in enumerate(batch):
-                    candidate_response = response['choices'][j]['message']['content']
-                    if DEBUG: print(f"DEBUG: Candidate response for {file}: {candidate_response}")
-                    try:
-                        name, score, reason = candidate_response.split(',', 2)
-                        results.append({
-                            'name': name.strip(),
-                            'response': candidate_response.strip()
-                        })
-                    except Exception as e:
-                        if DEBUG: print(f"DEBUG: Error parsing candidate response for {file}: {candidate_response}. Error: {e}")
+            # Parse the result
+            result_data = parse_result(response, resume_file)
+            
+            # Save the result
+            if result_data:
+                save_result(result_data, RESULT_FOLDER)
+                processed_count += 1
+                print(f"Scored {resume_file}: {result_data['name']} - {result_data['score']}")
             else:
-                combined_response = response['choices'][0]['message']['content']
-                if DEBUG: print(f"DEBUG: Combined candidate responses: {combined_response}")
-                responses = combined_response.split(';')
-                for resp in responses:
-                    if not resp.strip():
-                        continue
-                    try:
-                        name, score, reason = resp.split(',', 2)
-                        results.append({
-                            'name': name.strip(),
-                            'response': resp.strip()
-                        })
-                    except Exception as e:
-                        if DEBUG: print(f"DEBUG: Error parsing combined candidate response: {resp}. Error: {e}")
+                print(f"Failed to process {resume_file} - invalid response format")
             
-            save_results(results, RESULT_FOLDER, batch_filenames)
-            time.sleep(2)  # Avoid rate limiting
+            # Small delay to avoid rate limiting
+            time.sleep(1)
             
         except Exception as e:
-            print(f"ERROR: Failed to process batch {i//BATCH_SIZE + 1}: {e}")
-            # This batch failed after retries, stop the program
-            break
+            print(f"ERROR: Failed to process {resume_file}: {e}")
+            # Continue with next resume instead of stopping completely
+            continue
 
+    print(f"Processed {processed_count} out of {len(resume_files)} resumes")
+    
     # Aggregate and save final results
     aggregate_and_save_results(RESULT_FOLDER)
 
@@ -377,9 +433,12 @@ def aggregate_and_save_results(result_folder):
     for result_file in os.listdir(result_folder):
         if result_file.endswith('.json') and not result_file.startswith('_'):
             with open(os.path.join(result_folder, result_file), 'r') as f:
-                result = json.load(f)
-                if isinstance(result, dict) and 'score' in result:
-                    all_results.append(result)
+                try:
+                    result = json.load(f)
+                    if isinstance(result, dict) and 'score' in result:
+                        all_results.append(result)
+                except json.JSONDecodeError:
+                    print(f"Warning: Could not decode JSON in {result_file}")
 
     # Sort results by score
     all_results.sort(key=lambda x: x['score'], reverse=True)
