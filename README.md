@@ -88,7 +88,6 @@ pip install -r requirements.txt
 
 Make sure your virtual environment is activated, then run:
 
-
 ```bash
 python resume_scorer.py
 ```
@@ -177,3 +176,73 @@ Results are saved in JSON format with the following structure:
 ```
 
 A final sorted ranking (`_final_results.json`) is also generated.
+
+## Interview Questions Generator
+
+The `interview_questions_generator.py` script generates tailored interview questions based on a candidate's resume.
+
+### Features
+
+- Automatically lists all candidates from the results folder
+- Allows you to select a specific candidate
+- Customizable question generation with additional prompts
+- Generates three types of questions:
+  - Experience-related questions
+  - Technical questions
+  - Behavioral questions
+- Provides both human-readable output and JSON format
+- For each question, includes what to look for in the candidate's answer
+
+### Usage
+
+1. Make sure you have run the resume scorer first to generate candidate data
+2. Run the script:
+   ```
+   python interview_questions_generator.py
+   ```
+3. Select a candidate from the list
+4. Optionally provide additional instructions for question generation
+5. The script will generate and display the questions, and save them to a file
+
+### Example Output
+
+The script generates output in two formats:
+
+1. Human-readable format:
+
+```
+# Experience-related Questions
+
+1. Can you describe your experience developing and maintaining WordPress websites at Aunty SG PTE LTD?
+   Look for: Detailed knowledge of HTML, CSS, PHP, and JavaScript implementation in WordPress environments.
+
+2. How did you utilize Google Tag Manager and Google Analytics to improve website performance?
+   Look for: Understanding of analytics tools, data-driven decision making, and measurable results.
+
+3. Tell me about a specific challenge you faced during your web development work and how you overcame it.
+   Look for: Problem-solving skills, technical troubleshooting abilities, and persistence.
+
+# Technical Questions
+
+...
+```
+
+2. JSON format for programmatic use:
+
+```json
+{
+  "experience_questions": [
+    {
+      "question": "Can you describe your experience developing and maintaining WordPress websites at Aunty SG PTE LTD?",
+      "look_for": "Detailed knowledge of HTML, CSS, PHP, and JavaScript implementation in WordPress environments."
+    },
+    ...
+  ],
+  "technical_questions": [
+    ...
+  ],
+  "behavioral_questions": [
+    ...
+  ]
+}
+```
